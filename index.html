@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8" />
+  <title>煙火螢幕保護程式 - Canvas 版</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: radial-gradient(circle at bottom, #001018 0%, #000010 60%, #000000 100%);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: #f5f5f5;
+    }
+
+    #fireworksCanvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .control-panel {
+      position: fixed;
+      left: 50%;
+      bottom: 32px;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.55);
+      border-radius: 999px;
+      padding: 10px 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
+      z-index: 10;
+    }
+
+    .control-panel label {
+      font-size: 12px;
+      opacity: 0.9;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .control-panel input[type="range"] {
+      accent-color: #ffcc66;
+    }
+
+    .control-panel input[type="color"] {
+      width: 32px;
+      height: 18px;
+      border-radius: 999px;
+      border: none;
+      padding: 0;
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .control-panel select {
+      background: rgba(15, 15, 25, 0.9);
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #f5f5f5;
+      padding: 2px 8px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .hint {
+      position: fixed;
+      top: 16px;
+      right: 16px;
+      font-size: 11px;
+      opacity: 0.6;
+      background: rgba(0, 0, 0, 0.4);
+      padding: 6px 10px;
+      border-radius: 999px;
+      backdrop-filter: blur(4px);
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="fireworksCanvas"></canvas>
+
+  <div class="hint">空白鍵：暫停 / 繼續　　滑鼠點擊：在指定位置放煙火</div>
+
+  <div class="control-panel">
+    <label>
+      速度倍數
+      <input id="speedSlider" type="range" min="0.3" max="2.5" step="0.1" value="1" />
+    </label>
+
+    <label>
+      煙火頻率
+      <input id="rateSlider" type="range" min="0.3" max="3" step="0.1" value="1" />
+    </label>
+
+    <label>
+      顏色模式
+      <select id="colorMode">
+        <option value="rainbow">彩虹隨機</option>
+        <option value="theme">主題顏色</option>
+      </select>
+    </label>
+
+    <label>
+      主題色
+      <input id="colorPicker" type="color" value="#ffcc33" />
+    </label>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("fireworksCanvas");
+    const ctx = canvas.getContext("2d");
+
+    const speedSlider = document.getElementById("speedSlider");
+    const rateSlider = document.getElementById("rateSlider");
+    const colorModeSelect = document.getElementById("colorMode");
+    const colorPicker = document.getElementById("colorPicker");
+
+    let width = window.innerWidth;
+    let height = window.innerHeight;
+
+    canvas.width = width;
+    canvas.height = height;
+
+    window.addEventListener("resize", () => {
+      width = window.innerWidth;
+      height = window.innerHeight;
+      canvas.width = width;
+      canvas.height = height;
+    });
+
+    const GRAVITY = 0.08;
+    const FRICTION = 0.985;
+
+    class Particle {
+      constructor(x, y, color, speedMult) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = (Math.random() * 4 + 2) * speedMult;
+        this.x = x;
+        this.y = y;
+        this.vx = Math.cos(angle) * speed;
+        this.vy = Math.sin(angle) * speed;
+        this.alpha = 1;
+        this.size = Math.random() * 2.3 + 1.2;
+        this.color = color;
+        this.life = Math.random() * 40 + 30;
+      }
+
+      update() {
+        this.vx *= FRICTION;
+        this.vy *= FRICTION;
+        this.vy += GRAVITY * 0.2;
+        this.x += this.vx;
+        this.y += this.vy;
+        this.life -= 1;
+        this.alpha = Math.max(0, this.life / 70);
+      }
+
+      draw(ctx) {
+        ctx.save();
+        ctx.globalCompositeOperation = "lighter";
+        ctx.globalAlpha = this.alpha;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = this.color;
+        ctx.fill();
+        ctx.restore();
+      }
+
+      get isAlive() {
+        return this.life > 0 && this.alpha > 0.02;
+      }
+    }
+
+    class FireworkShell {
+      constructor(x, targetY, baseColor, speedMult) {
+        this.x = x;
+        this.y = height + 10;
+        this.targetY = targetY;
+        this.speedMult = speedMult;
+        this.baseColor = baseColor;
+        this.vy = -(Math.random() * 5 + 7) * speedMult;
+        this.exploded = false;
+        this.trail = [];
+      }
+
+      update(particles) {
+        if (!this.exploded) {
+          this.trail.push({ x: this.x, y: this.y, alpha: 1 });
+          if (this.trail.length > 10) this.trail.shift();
+
+          this.y += this.vy;
+          this.vy += GRAVITY * -0.12;
+
+          if (this.y <= this.targetY || this.vy >= -1) {
+            this.explode(particles);
+            this.exploded = true;
+          }
+        }
+      }
+
+      explode(particles) {
+        const count = Math.floor(Math.random() * 40) + 50;
+        for (let i = 0; i < count; i++) {
+          particles.push(new Particle(this.x, this.y, this.baseColor(), this.speedMult));
+        }
+      }
+
+      draw(ctx) {
+        if (!this.exploded) {
+          ctx.save();
+          ctx.globalCompositeOperation = "lighter";
+
+          for (let i = 0; i < this.trail.length; i++) {
+            const p = this.trail[i];
+            const alpha = (i + 1) / this.trail.length;
+            ctx.globalAlpha = alpha * 0.6;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 2 + i * 0.2, 0, Math.PI * 2);
+            ctx.fillStyle = this.baseColor();
+            ctx.fill();
+          }
+
+          ctx.globalAlpha = 1;
+          ctx.beginPath();
+          ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+          ctx.fillStyle = "#ffffff";
+          ctx.fill();
+          ctx.restore();
+        }
+      }
+
+      get isAlive() {
+        return !this.exploded;
+      }
+    }
+
+    const shells = [];
+    const particles = [];
+
+    let lastSpawn = 0;
+    let spawnInterval = 900;
+    let paused = false;
+
+    function hexToHsl(hex) {
+      const sanitized = hex.replace("#", "");
+      const bigint = parseInt(sanitized, 16);
+      const r = (bigint >> 16) & 255;
+      const g = (bigint >> 8) & 255;
+      const b = bigint & 255;
+
+      const rNorm = r / 255;
+      const gNorm = g / 255;
+      const bNorm = b / 255;
+
+      const max = Math.max(rNorm, gNorm, bNorm);
+      const min = Math.min(rNorm, gNorm, bNorm);
+      const diff = max - min;
+
+      let h = 0;
+      let s = 0;
+      const l = (max + min) / 2;
+
+      if (diff !== 0) {
+        s = diff / (1 - Math.abs(2 * l - 1));
+        switch (max) {
+          case rNorm:
+            h = ((gNorm - bNorm) / diff) % 6;
+            break;
+          case gNorm:
+            h = (bNorm - rNorm) / diff + 2;
+            break;
+          default:
+            h = (rNorm - gNorm) / diff + 4;
+        }
+        h *= 60;
+        if (h < 0) h += 360;
+      }
+
+      return { h, s: s * 100, l: l * 100 };
+    }
+
+    function getColorGenerator() {
+      const mode = colorModeSelect.value;
+      if (mode === "rainbow") {
+        const baseHue = Math.random() * 360;
+        return () => {
+          const hue = baseHue + (Math.random() - 0.5) * 40;
+          const sat = 80 + Math.random() * 15;
+          const light = 50 + Math.random() * 10;
+          return `hsl(${hue}, ${sat}%, ${light}%)`;
+        };
+      } else {
+        const { h, s, l } = hexToHsl(colorPicker.value);
+        return () => {
+          const hue = h + (Math.random() - 0.5) * 20;
+          const sat = Math.min(100, Math.max(40, s + (Math.random() - 0.5) * 10));
+          const light = Math.min(80, Math.max(30, l + (Math.random() - 0.5) * 10));
+          return `hsl(${hue}, ${sat}%, ${light}%)`;
+        };
+      }
+    }
+
+    function spawnShell(targetX, targetY) {
+      const x = targetX ?? (Math.random() * width * 0.6 + width * 0.2);
+      const baseHeight = height * (0.15 + Math.random() * 0.5);
+      const y = targetY ?? baseHeight;
+
+      const speedMult = parseFloat(speedSlider.value);
+      const colorGen = getColorGenerator();
+
+      shells.push(new FireworkShell(x, y, colorGen, speedMult));
+    }
+
+    function loop(timestamp) {
+      if (!paused) {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.18)";
+        ctx.fillRect(0, 0, width, height);
+
+        const rate = parseFloat(rateSlider.value);
+        spawnInterval = 1100 / rate;
+
+        if (!lastSpawn) lastSpawn = timestamp;
+        const delta = timestamp - lastSpawn;
+        if (delta >= spawnInterval) {
+          spawnShell();
+          lastSpawn = timestamp;
+        }
+
+        for (let i = shells.length - 1; i >= 0; i--) {
+          const s = shells[i];
+          s.update(particles);
+          s.draw(ctx);
+          if (!s.isAlive) {
+            shells.splice(i, 1);
+          }
+        }
+
+        for (let i = particles.length - 1; i >= 0; i--) {
+          const p = particles[i];
+          p.update();
+          p.draw(ctx);
+          if (!p.isAlive) {
+            particles.splice(i, 1);
+          }
+        }
+      }
+      requestAnimationFrame(loop);
+    }
+
+    canvas.addEventListener("click", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      spawnShell(x, y);
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space") {
+        paused = !paused;
+      }
+    });
+
+    ctx.fillStyle = "rgba(0, 0, 0, 1)";
+    ctx.fillRect(0, 0, width, height);
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
